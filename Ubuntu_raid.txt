@@ -1,0 +1,123 @@
+Руководство по переносу системы на массив RAID1, созданный на двух новых дисках. Мануал составлен мной в течении нескольких часов, по информации найденной в сети и с анализом и корректировкой всех шагов для успешного решения предложенного задания.
+
+Сразу нужно обговорить, что полный перенос с 1 диска на RAID1, созданный на двух новых дисках, не прекращая работу сервера не получится, потребуется перезагрузка.
+
+0. Подключаемся к серверу по ssh
+
+1. Действия выполняем от пользователя root (опционально через sudo)
+sudo su
+
+2. Обновляем индексацию пакетов пакетного менеджера, устанавливаем mdadm и необходимые в процессе утилиты
+apt update
+apt install -y mdadm initramfs-tools rsync tmux
+
+3.Загрузим необходимые модули ядра:
+modprobe linear
+modprobe multipath
+modprobe raid1
+
+4. Правим конфиг загрузчика GRUB по пути /etc/default/grub:
+GRUB_TIMEOUT=5 (таймаут 5 сек.)
+GRUB_RECORDFAIL_TIMEOUT=10 (чтобы система могла загрузиться в случае ошибки)
+GRUB_CMDLINE_LINUX_DEFAULT=«bootdegraded» (добавляем «bootdegraded», чтобы система могла загрузиться с неполноценного массива);
+#GRUB_HIDDEN_TIMEOUT_QUIET=true (необходимо закомментировать, чтобы меню GRUB всегда отображалось).
+
+5. Временно отключаем swap командой
+swapoff
+
+6. Смотрим идентификаторы подключенных дисков
+lsblk
+Условимся, что получили вывод, где исходный диск /dev/sda и новые диски /dev/sdb /dev/sdc
+и на исходном диске
+/dev/sda1  swap
+/dev/sda2  /
+
+7.размечаем новые диски идентично исходному
+sfdisk -d /dev/sda | sfdisk -f /dev/sdb
+sfdisk -d /dev/sda | sfdisk -f /dev/sdc
+
+8. Меняем тип разделов жестких дисков /dev/sdb и /dev/sdс на тип "fd" (Linux raid autodetect)
+fdisk /dev/sdb
+fdisk /dev/sdс
+(меняем тип всех партиций новых дисков на "fd" согласно меню fdisk)
+
+9. Создаём раздел под swap на первом новом диске
+mdadm --create --verbose /dev/md0 --raid-devices=2 --level=1 --metadata=1.2 /dev/sda1 /dev/sdb1
+Смотрим результат команды cat /proc/mdstat
+
+10. Делаем swap
+mkswap /dev/md0
+
+11. Создаём mdadm раздел под корень ( / ) на первом новом диске и создаём фс
+mdadm --create --verbose /dev/md1 --raid-devices=2 --level=1 --metadata=1.2 missing /dev/sdb2
+mkfs.ext4 /dev/md1
+
+12. Обновляем конфигурацию mdadm.conf:
+mdadm --detail --scan >> /etc/mdadm/mdadm.conf
+
+13. Обновляем initramfs, для подключения RAID:
+update-initramfs -u
+
+14. Синхронизация корневого раздела исходного диска и нового раздела RAID. Здесь предпочтительно максимально остановить сервисы сервера на момент синхронизации или как вариант выбрать время суток с наименьшей нагрузкой. Используется tmux мультиплексор, для предотвращения обрыва синхронизации при разрыве ssh соединения.
+Монтируем md1 в /mnt/chroot и синхронизируем
+mkdir /mnt/chroot
+mount /dev/md1 /mnt/chroot && [tmux|screen] rsync -axu / /mnt/chroot
+
+15. Дождавшись окончания синхронизации, монтируем системные каталоги к новому корню и делаем chroot в новый корень.  
+mkdir /mnt/chroot/proc && mount --bind /proc /mnt/chroot/proc
+mkdir /mnt/chroot/dev && mount --bind /dev /mnt/chroot/dev
+mkdir /mnt/chroot/var && mount --bind /var /mnt/chroot/var
+mkdir /mnt/chroot/run && mount --bind /run /mnt/chroot/run
+mkdir /mnt/chroot/sys && mount --bind /sys /mnt/chroot/sys
+chroot /mnt/chroot
+
+В новом окружении:
+
+16. узнаём UUID разделов RAID массива командой 
+ls -l /dev/disk/by-uuid |grep md 
+
+17. Правим /etc/fstab, и /etc/mtab, заменяя UUID разделов первого диска на UUID разделов RAID,
+меняем
+/dev/sda1
+/dev/sda2
+на 
+UUID=(идентификатор raid swap)
+UUID=(идентификатор raid корня)
+
+18. Включаем созданный ранее swap:
+swapon -a
+
+19. Обновляем GRUB, чтобы подгрузились необходимые для RAID модули (mdraid1x) и проверяем что в его конфиг прописан uuid для корневого раздела RAID, update-grub берет данные о корне (откуда грузить ядро и initrd) из правленного ранее fstab.
+update-grub && cat /boot/grub/grub.cfg
+
+20. Ставим GRUB на оба новых диска.
+grub-install /dev/sdb
+grub-install /dev/sdс
+
+21. Прописываем конфигурацию mdadm, которая позволит загрузится с деградированного массива.
+dpkg-reconfigure mdadm (там со всем соглашаемся, включаяя последний шаг, где спрашивают - позволять ли грузится системе на деградированном массиве)
+
+dpkg-reconfigure вызовет перестройку initrd, но так как мы в chroot, то он его перезапишет только в корне RAID массива (на реальном корне initrd сохранится таким как он был) 
+
+22. Выходим из chroot, и перед перезагрузкой сервера делаем ещё раз синхронизацию, для обновления файлов, изменённых в процессе работы сервера.
+exit
+[tmux|screen] rsync -axu / /mnt/chroot/
+
+23. Переносим подготовленную конфигурацию загрузчика. Сохраняем старый файл, который может понадобиться при восстановлении системы в случае невозможности загрузиться с RAID, а затем копируем файл конфигурации: 
+
+делаем бекап исходного конфига:
+cp -p /boot/grub/grub.cfg /boot/grub/grub.old 
+копируем новый конфиг в /boot
+cp -p /mnt/chroot/boot/grub/grub.cfg /boot/grub/grub.cfg
+
+24. Перезагружаем сервер.
+reboot
+Запустим в консоли ping до сервера, ждём когда сервер станет доступен.
+Подключаемся к серверу по ssh
+
+25. Система загрузилась с RAID нового диска, второй новый диск уже был предварительно размечен идентично исходному, установлен GRUB и выбран тип разделов "fd", теперь подключим его к массиву:
+mdadm --add /dev/md0 /dev/sdc1
+mdadm --add /dev/md1 /dev/sdc2
+
+26. Ждём процесс синхронизации файлов на второй новый диск
+watch -n 5 cat /proc/mdstat
