@@ -2,7 +2,7 @@
 
 ----
 
-Immediately it is necessary to discuss that a full transfer from 1 disk to RAID1, created on two new disks, without stopping the server's operation, will not work, a reboot will be required.
+Immediately it is necessary to discuss that a full transfer from 1 disk to RAID1, created on two new disks, without stopping the server's operation, will not work, and reboot will be required.
 
 0. Connect to the server via ssh
 
@@ -18,7 +18,7 @@ modprobe linear
 modprobe multipath
 modprobe raid1
 
-4. Edit the GRUB bootloader config along the path / etc / default / grub:
+4. Edit the GRUB bootloader config along the path /etc/default/grub:
 GRUB_TIMEOUT = 5 (timeout 5 sec.)
 GRUB_RECORDFAIL_TIMEOUT = 10 (so the system can boot in case of error)
 GRUB_CMDLINE_LINUX_DEFAULT = "bootdegraded" (add "bootdegraded" so that the system can boot from a defective array);
@@ -29,30 +29,30 @@ swapoff
 
 6. We look at the identifiers of the connected drives
 lsblk
-Let's agree that we got the output where the original disk is / dev / sda and the new disks / dev / sdb / dev / sdc
+Let's agree that we got the output where the original disk is /dev/sda and the new disks /dev/sdb, /dev/sdc
 and on the source disk
-/ dev / sda1 swap
-/ dev / sda2 /
+/dev/sda1 swap
+/dev/sda2/
 
 7.Partition the new disks identically to the original
-sfdisk -d / dev / sda | sfdisk -f / dev / sdb
-sfdisk -d / dev / sda | sfdisk -f / dev / sdc
+sfdisk -d /dev/sda | sfdisk -f /dev/sdb
+sfdisk -d /dev/sda | sfdisk -f /dev/sdc
 
-8. Change the type of hard disk partitions / dev / sdb and / dev / sdc to type "fd" (Linux raid autodetect)
-fdisk / dev / sdb
-fdisk / dev / sdc
+8. Change the type of hard disk partitions /dev/sdb and /dev/sdc to type "fd" (Linux raid autodetect)
+fdisk /dev/sdb
+fdisk /dev/sdc
 (change the type of all partitions of the new disks to "fd" according to the fdisk menu)
 
 9. Create a partition for swap on the first new disk
-mdadm --create --verbose / dev / md0 --raid-devices = 2 --level = 1 --metadata = 1.2 / dev / sda1 / dev / sdb1
-See the result of the cat / proc / mdstat command
+mdadm --create --verbose /dev/md0 --raid-devices = 2 --level = 1 --metadata = 1.2 /dev/sda1 /dev/sdb1
+See the result of the cat /proc/mdstat command
 
 10. Making swap
-mkswap / dev / md0
+mkswap /dev/md0
 
 11. Create a mdadm partition under the root (/) on the first new disk and create a fs
-mdadm --create --verbose / dev / md1 --raid-devices = 2 --level = 1 --metadata = 1.2 missing / dev / sdb2
-mkfs.ext4 / dev / md1
+mdadm --create --verbose /dev/md1 --raid-devices = 2 --level = 1 --metadata = 1.2 missing /dev/sdb2
+mkfs.ext4 /dev/md1
 
 12. Update the mdadm.conf configuration:
 mdadm --detail --scan >> /etc/mdadm/mdadm.conf
@@ -61,27 +61,26 @@ mdadm --detail --scan >> /etc/mdadm/mdadm.conf
 update-initramfs -u
 
 14. Synchronization of the root partition of the original disk and the new RAID partition. Here, it is preferable to stop the server services as much as possible at the time of synchronization, or, alternatively, choose the time of day with the lowest load. A tmux multiplexer is used to prevent sync breaks when ssh connections are broken.
-Mount md1 to / mnt / chroot and sync
-mkdir / mnt / chroot
-mount / dev / md1 / mnt / chroot && [tmux | screen] rsync -axu / / mnt / chroot
+Mount md1 to /mnt/chroot and sync
+mkdir /mnt/chroot
+mount /dev/md1 /mnt/chroot && [tmux|screen] rsync -axu / /mnt/chroot
 
 15. After waiting for the end of synchronization, mount the system directories to the new root and chroot to the new root.  
-mkdir / mnt / chroot / proc && mount --bind / proc / mnt / chroot / proc
-mkdir / mnt / chroot / dev && mount --bind / dev / mnt / chroot / dev
-mkdir / mnt / chroot / var && mount --bind / var / mnt / chroot / var
-mkdir / mnt / chroot / run && mount --bind / run / mnt / chroot / run
-mkdir / mnt / chroot / sys && mount --bind / sys / mnt / chroot / sys
-chroot / mnt / chroot
+mkdir /mnt/chroot/proc && mount --bind /proc /mnt/chroot/proc
+mkdir /mnt/chroot/dev && mount --bind /dev /mnt/chroot/dev
+mkdir /mnt/chroot/var && mount --bind /var /mnt/chroot/var
+mkdir /mnt/chroot/run && mount --bind /run /mnt/chroot/run
+mkdir /mnt/chroot/sys && mount --bind /sys /mnt/chroot/sys
 
 In a new environment:
 
 16. find out the UUID of the RAID partitions with the command 
-ls -l / dev / disk / by-uuid | grep md 
+ls -l /dev/disk/by-uuid |grep md 
 
-17. Edit / etc / fstab, and / etc / mtab, replacing the UUID of the first disk partitions with the UUID of the RAID partitions,
+17. Edit /etc/fstab, and /etc/mtab, replacing the UUID of the first disk partitions with the UUID of the RAID partitions,
 change
-/ dev / sda1
-/ dev / sda2
+/dev/sda1
+/dev/sda2
 on 
 UUID = (raid swap id)
 UUID = (root raid id)
@@ -93,8 +92,8 @@ swapon -a
 update-grub && cat /boot/grub/grub.cfg
 
 20. Install GRUB on both new disks.
-grub-install / dev / sdb
-grub-install / dev / sdc
+grub-install /dev/sdb
+grub-install /dev/sdc
 
 21. We register the mdadm configuration, which will allow booting from a degraded array.
 dpkg-reconfigure mdadm (there we agree with everything, including the last step, where they ask whether to allow the system to boot on a degraded array)
@@ -103,13 +102,13 @@ dpkg-reconfigure will cause the initrd to be rebuilt, but since we are in chroot
 
 22. We exit the chroot, and before restarting the server, we do the synchronization again to update the files changed during the server operation.
 exit
-[tmux | screen] rsync -axu / / mnt / chroot /
+[tmux|screen] rsync -axu / /mnt/chroot/
 
 23. Transfer the prepared bootloader configuration. We save the old file, which may be needed when recovering the system if it is impossible to boot from the RAID, and then copy the configuration file:
 
 make a backup of the original config:
 cp -p /boot/grub/grub.cfg /boot/grub/grub.old 
-copy the new config to / boot
+copy the new config to /boot
 cp -p /mnt/chroot/boot/grub/grub.cfg /boot/grub/grub.cfg
 
 24. We reboot the server.
@@ -118,8 +117,10 @@ Let's start ping to the server in the console, waiting for the server to become 
 Connect to the server via ssh
 
 25. The system booted from the RAID of the new disk, the second new disk has already been pre-partitioned identically to the original one, GRUB is installed and the partition type "fd" is selected, now let's connect it to the array:
-mdadm --add / dev / md0 / dev / sdc1
-mdadm --add / dev / md1 / dev / sdc2
+mdadm --add /dev/md0 /dev/sdc1
+mdadm --add /dev/md1 /dev/sdc2
 
 26. We are waiting for the process of synchronizing files to the second new disk
-watch -n 5 cat / proc / mdstat
+watch -n 5 cat /proc/mdstat
+
+27. Done.
