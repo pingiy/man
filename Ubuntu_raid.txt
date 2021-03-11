@@ -1,123 +1,125 @@
-Руководство по переносу системы на массив RAID1, созданный на двух новых дисках. Мануал составлен мной в течении нескольких часов, по информации найденной в сети и с анализом и корректировкой всех шагов для успешного решения предложенного задания.
+### A guide to migrating your system to a RAID1 array created on two new drives. The manual was compiled by me within a few hours, according to the information found on the network and with the analysis and correction of all steps for the successful solution of the proposed task. ###
 
-Сразу нужно обговорить, что полный перенос с 1 диска на RAID1, созданный на двух новых дисках, не прекращая работу сервера не получится, потребуется перезагрузка.
+----
 
-0. Подключаемся к серверу по ssh
+Immediately it is necessary to discuss that a full transfer from 1 disk to RAID1, created on two new disks, without stopping the server's operation, will not work, a reboot will be required.
 
-1. Действия выполняем от пользователя root (опционально через sudo)
+0. Connect to the server via ssh
+
+1. Perform actions as root user (optionally via sudo)
 sudo su
 
-2. Обновляем индексацию пакетов пакетного менеджера, устанавливаем mdadm и необходимые в процессе утилиты
+2. We update the indexing of packages of the package manager, install mdadm and the utilities necessary in the process
 apt update
 apt install -y mdadm initramfs-tools rsync tmux
 
-3.Загрузим необходимые модули ядра:
+3.Load the necessary kernel modules:
 modprobe linear
 modprobe multipath
 modprobe raid1
 
-4. Правим конфиг загрузчика GRUB по пути /etc/default/grub:
-GRUB_TIMEOUT=5 (таймаут 5 сек.)
-GRUB_RECORDFAIL_TIMEOUT=10 (чтобы система могла загрузиться в случае ошибки)
-GRUB_CMDLINE_LINUX_DEFAULT=«bootdegraded» (добавляем «bootdegraded», чтобы система могла загрузиться с неполноценного массива);
-#GRUB_HIDDEN_TIMEOUT_QUIET=true (необходимо закомментировать, чтобы меню GRUB всегда отображалось).
+4. Edit the GRUB bootloader config along the path / etc / default / grub:
+GRUB_TIMEOUT = 5 (timeout 5 sec.)
+GRUB_RECORDFAIL_TIMEOUT = 10 (so the system can boot in case of error)
+GRUB_CMDLINE_LINUX_DEFAULT = "bootdegraded" (add "bootdegraded" so that the system can boot from a defective array);
+# GRUB_HIDDEN_TIMEOUT_QUIET = true (must be commented out so the GRUB menu is always displayed).
 
-5. Временно отключаем swap командой
+5. Temporarily disable swap with the command
 swapoff
 
-6. Смотрим идентификаторы подключенных дисков
+6. We look at the identifiers of the connected drives
 lsblk
-Условимся, что получили вывод, где исходный диск /dev/sda и новые диски /dev/sdb /dev/sdc
-и на исходном диске
-/dev/sda1  swap
-/dev/sda2  /
+Let's agree that we got the output where the original disk is / dev / sda and the new disks / dev / sdb / dev / sdc
+and on the source disk
+/ dev / sda1 swap
+/ dev / sda2 /
 
-7.размечаем новые диски идентично исходному
-sfdisk -d /dev/sda | sfdisk -f /dev/sdb
-sfdisk -d /dev/sda | sfdisk -f /dev/sdc
+7.Partition the new disks identically to the original
+sfdisk -d / dev / sda | sfdisk -f / dev / sdb
+sfdisk -d / dev / sda | sfdisk -f / dev / sdc
 
-8. Меняем тип разделов жестких дисков /dev/sdb и /dev/sdс на тип "fd" (Linux raid autodetect)
-fdisk /dev/sdb
-fdisk /dev/sdс
-(меняем тип всех партиций новых дисков на "fd" согласно меню fdisk)
+8. Change the type of hard disk partitions / dev / sdb and / dev / sdc to type "fd" (Linux raid autodetect)
+fdisk / dev / sdb
+fdisk / dev / sdc
+(change the type of all partitions of the new disks to "fd" according to the fdisk menu)
 
-9. Создаём раздел под swap на первом новом диске
-mdadm --create --verbose /dev/md0 --raid-devices=2 --level=1 --metadata=1.2 /dev/sda1 /dev/sdb1
-Смотрим результат команды cat /proc/mdstat
+9. Create a partition for swap on the first new disk
+mdadm --create --verbose / dev / md0 --raid-devices = 2 --level = 1 --metadata = 1.2 / dev / sda1 / dev / sdb1
+See the result of the cat / proc / mdstat command
 
-10. Делаем swap
-mkswap /dev/md0
+10. Making swap
+mkswap / dev / md0
 
-11. Создаём mdadm раздел под корень ( / ) на первом новом диске и создаём фс
-mdadm --create --verbose /dev/md1 --raid-devices=2 --level=1 --metadata=1.2 missing /dev/sdb2
-mkfs.ext4 /dev/md1
+11. Create a mdadm partition under the root (/) on the first new disk and create a fs
+mdadm --create --verbose / dev / md1 --raid-devices = 2 --level = 1 --metadata = 1.2 missing / dev / sdb2
+mkfs.ext4 / dev / md1
 
-12. Обновляем конфигурацию mdadm.conf:
+12. Update the mdadm.conf configuration:
 mdadm --detail --scan >> /etc/mdadm/mdadm.conf
 
-13. Обновляем initramfs, для подключения RAID:
+13. Update initramfs to connect RAID:
 update-initramfs -u
 
-14. Синхронизация корневого раздела исходного диска и нового раздела RAID. Здесь предпочтительно максимально остановить сервисы сервера на момент синхронизации или как вариант выбрать время суток с наименьшей нагрузкой. Используется tmux мультиплексор, для предотвращения обрыва синхронизации при разрыве ssh соединения.
-Монтируем md1 в /mnt/chroot и синхронизируем
-mkdir /mnt/chroot
-mount /dev/md1 /mnt/chroot && [tmux|screen] rsync -axu / /mnt/chroot
+14. Synchronization of the root partition of the original disk and the new RAID partition. Here, it is preferable to stop the server services as much as possible at the time of synchronization, or, alternatively, choose the time of day with the lowest load. A tmux multiplexer is used to prevent sync breaks when ssh connections are broken.
+Mount md1 to / mnt / chroot and sync
+mkdir / mnt / chroot
+mount / dev / md1 / mnt / chroot && [tmux | screen] rsync -axu / / mnt / chroot
 
-15. Дождавшись окончания синхронизации, монтируем системные каталоги к новому корню и делаем chroot в новый корень.  
-mkdir /mnt/chroot/proc && mount --bind /proc /mnt/chroot/proc
-mkdir /mnt/chroot/dev && mount --bind /dev /mnt/chroot/dev
-mkdir /mnt/chroot/var && mount --bind /var /mnt/chroot/var
-mkdir /mnt/chroot/run && mount --bind /run /mnt/chroot/run
-mkdir /mnt/chroot/sys && mount --bind /sys /mnt/chroot/sys
-chroot /mnt/chroot
+15. After waiting for the end of synchronization, mount the system directories to the new root and chroot to the new root.  
+mkdir / mnt / chroot / proc && mount --bind / proc / mnt / chroot / proc
+mkdir / mnt / chroot / dev && mount --bind / dev / mnt / chroot / dev
+mkdir / mnt / chroot / var && mount --bind / var / mnt / chroot / var
+mkdir / mnt / chroot / run && mount --bind / run / mnt / chroot / run
+mkdir / mnt / chroot / sys && mount --bind / sys / mnt / chroot / sys
+chroot / mnt / chroot
 
-В новом окружении:
+In a new environment:
 
-16. узнаём UUID разделов RAID массива командой 
-ls -l /dev/disk/by-uuid |grep md 
+16. find out the UUID of the RAID partitions with the command 
+ls -l / dev / disk / by-uuid | grep md 
 
-17. Правим /etc/fstab, и /etc/mtab, заменяя UUID разделов первого диска на UUID разделов RAID,
-меняем
-/dev/sda1
-/dev/sda2
-на 
-UUID=(идентификатор raid swap)
-UUID=(идентификатор raid корня)
+17. Edit / etc / fstab, and / etc / mtab, replacing the UUID of the first disk partitions with the UUID of the RAID partitions,
+change
+/ dev / sda1
+/ dev / sda2
+on 
+UUID = (raid swap id)
+UUID = (root raid id)
 
-18. Включаем созданный ранее swap:
+18. Turn on the previously created swap:
 swapon -a
 
-19. Обновляем GRUB, чтобы подгрузились необходимые для RAID модули (mdraid1x) и проверяем что в его конфиг прописан uuid для корневого раздела RAID, update-grub берет данные о корне (откуда грузить ядро и initrd) из правленного ранее fstab.
+19. Update GRUB to load the modules necessary for RAID (mdraid1x) and check that its config contains uuid for the root RAID partition, update-grub takes data about the root (where to load the kernel and initrd from) from the previously edited fstab.
 update-grub && cat /boot/grub/grub.cfg
 
-20. Ставим GRUB на оба новых диска.
-grub-install /dev/sdb
-grub-install /dev/sdс
+20. Install GRUB on both new disks.
+grub-install / dev / sdb
+grub-install / dev / sdc
 
-21. Прописываем конфигурацию mdadm, которая позволит загрузится с деградированного массива.
-dpkg-reconfigure mdadm (там со всем соглашаемся, включаяя последний шаг, где спрашивают - позволять ли грузится системе на деградированном массиве)
+21. We register the mdadm configuration, which will allow booting from a degraded array.
+dpkg-reconfigure mdadm (there we agree with everything, including the last step, where they ask whether to allow the system to boot on a degraded array)
 
-dpkg-reconfigure вызовет перестройку initrd, но так как мы в chroot, то он его перезапишет только в корне RAID массива (на реальном корне initrd сохранится таким как он был) 
+dpkg-reconfigure will cause the initrd to be rebuilt, but since we are in chroot, it will overwrite it only in the root of the RAID array (on the real root, initrd will be saved as it was) 
 
-22. Выходим из chroot, и перед перезагрузкой сервера делаем ещё раз синхронизацию, для обновления файлов, изменённых в процессе работы сервера.
+22. We exit the chroot, and before restarting the server, we do the synchronization again to update the files changed during the server operation.
 exit
-[tmux|screen] rsync -axu / /mnt/chroot/
+[tmux | screen] rsync -axu / / mnt / chroot /
 
-23. Переносим подготовленную конфигурацию загрузчика. Сохраняем старый файл, который может понадобиться при восстановлении системы в случае невозможности загрузиться с RAID, а затем копируем файл конфигурации: 
+23. Transfer the prepared bootloader configuration. We save the old file, which may be needed when recovering the system if it is impossible to boot from the RAID, and then copy the configuration file:
 
-делаем бекап исходного конфига:
+make a backup of the original config:
 cp -p /boot/grub/grub.cfg /boot/grub/grub.old 
-копируем новый конфиг в /boot
+copy the new config to / boot
 cp -p /mnt/chroot/boot/grub/grub.cfg /boot/grub/grub.cfg
 
-24. Перезагружаем сервер.
+24. We reboot the server.
 reboot
-Запустим в консоли ping до сервера, ждём когда сервер станет доступен.
-Подключаемся к серверу по ssh
+Let's start ping to the server in the console, waiting for the server to become available.
+Connect to the server via ssh
 
-25. Система загрузилась с RAID нового диска, второй новый диск уже был предварительно размечен идентично исходному, установлен GRUB и выбран тип разделов "fd", теперь подключим его к массиву:
-mdadm --add /dev/md0 /dev/sdc1
-mdadm --add /dev/md1 /dev/sdc2
+25. The system booted from the RAID of the new disk, the second new disk has already been pre-partitioned identically to the original one, GRUB is installed and the partition type "fd" is selected, now let's connect it to the array:
+mdadm --add / dev / md0 / dev / sdc1
+mdadm --add / dev / md1 / dev / sdc2
 
-26. Ждём процесс синхронизации файлов на второй новый диск
-watch -n 5 cat /proc/mdstat
+26. We are waiting for the process of synchronizing files to the second new disk
+watch -n 5 cat / proc / mdstat
